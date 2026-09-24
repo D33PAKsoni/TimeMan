@@ -1,0 +1,11 @@
+{
+  "title": "TimeMan",
+  "description": "Organize and manage your media and ideas by syncing Google Calendar and YouTube to receive daily reminders and keep playlists and notes up to date.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

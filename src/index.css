@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: "Roboto", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Roboto", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, monospace;
+
+  /* Google Material Design — dark baseline */
+  --color-background: #121212;
+  --color-surface: #1e1e1e;   /* dp01 */
+  --color-surface-2: #232323; /* dp02 */
+  --color-elevated: #2c2c2c;  /* dp04 */
+  --color-foreground: rgba(255, 255, 255, 0.87);
+  --color-muted: rgba(255, 255, 255, 0.60);
+  --color-muted-2: rgba(255, 255, 255, 0.38);
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-border-strong: rgba(255, 255, 255, 0.24);
+
+  --color-primary: #bb86fc;            /* Material purple 200 */
+  --color-primary-foreground: #000000;
+  --color-accent: #03dac6;             /* Material teal 200 */
+  --color-error: #cf6679;
+
+  /* List category accents */
+  --color-lime: #03dac6;
+  --color-cyan: #8ab4f8;
+  --color-amber: #ffb74d;
+
+  --radius: 0.75rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Flat Material ground (no gradient). */
+.app-mesh {
+  background-color: var(--color-background);
+}
+
+::selection {
+  background: rgba(187, 134, 252, 0.4);
+  color: #fff;
+}
+
+/* Hide scrollbars until scrolling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  transition: background 0.2s;
+}

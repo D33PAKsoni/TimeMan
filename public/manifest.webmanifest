@@ -1,0 +1,20 @@
+{
+  "name": "TaskMan — Time & Watchlist Companion",
+  "short_name": "TaskMan",
+  "description": "Organize ideas, movies, anime and series into lists, create Google Calendar events, and keep your YouTube watchlist from going stale.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "categories": ["productivity", "entertainment", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
