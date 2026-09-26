@@ -5,6 +5,16 @@
 // plus any key from the icon registry in components/Lists.tsx (custom lists).
 export type ListKind = string
 
+export type Priority = "low" | "medium" | "high" | "urgent"
+
+export const PRIORITY_LEVELS: { value: Priority; label: string; color: string }[] = [
+  { value: "low", label: "Low", color: "var(--color-cyan)" },
+  { value: "medium", label: "Medium", color: "var(--color-amber)" },
+  { value: "high", label: "High", color: "#ff8a65" },
+  { value: "urgent", label: "Urgent", color: "var(--color-error)" },
+]
+export const priorityColor = (p: Priority | undefined) => PRIORITY_LEVELS.find((l) => l.value === p)?.color
+
 export type ListItem = {
   id: string
   title: string
@@ -12,6 +22,7 @@ export type ListItem = {
   done: boolean
   syncedToCalendar: boolean
   tags: string[]
+  priority?: Priority
 }
 
 export type ListCategory = {
@@ -22,9 +33,20 @@ export type ListCategory = {
   items: ListItem[]
 }
 
+// The default category the app opens to — first in the list so it's the
+// initially active tab (see Lists.tsx's initial useState(lists[0].id)).
+export const defaultTodoList: ListCategory = {
+  id: "todo",
+  name: "ToDo",
+  kind: "list",
+  accent: "var(--color-cyan)",
+  items: [],
+}
+
 // Empty starter categories seeded on a user's first run. These are structure,
 // not sample content — every list begins empty.
 export const defaultLists: ListCategory[] = [
+  defaultTodoList,
   { id: "ideas", name: "Ideas", kind: "idea", accent: "var(--color-primary)", items: [] },
   { id: "movies", name: "Movies", kind: "movie", accent: "var(--color-error)", items: [] },
   { id: "anime", name: "Anime", kind: "anime", accent: "var(--color-accent)", items: [] },

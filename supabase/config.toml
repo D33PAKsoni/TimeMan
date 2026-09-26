@@ -1,0 +1,19 @@
+project_id = "timeman"
+
+# The function's source lives at supabase/functions/server/index.tsx, but it's
+# deployed under the slug "make-server-3fde14d4" (that's the URL path prefix
+# the Hono app itself uses — see PREFIX in server/index.tsx). The CLI's default
+# convention is supabase/functions/<slug>/index.ts, which doesn't match this
+# layout, so `entrypoint` points it at the real file. This path is relative to
+# the supabase/ folder itself (where this config.toml lives), NOT the project
+# root — that's why it does not repeat the leading "supabase/".
+[functions.make-server-3fde14d4]
+entrypoint = "functions/server/index.tsx"
+
+# REQUIRED. The function does its own per-route auth (see the api.use("*", ...)
+# middleware in index.tsx) so /health and CORS preflight OPTIONS requests can be
+# answered without a token. If this is left at the default (true), Supabase's
+# gateway rejects every request that lacks a valid JWT — including every
+# browser CORS preflight, since preflight OPTIONS requests never carry one —
+# before the function even runs, which breaks the app entirely from a browser.
+verify_jwt = false

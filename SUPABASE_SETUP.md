@@ -37,12 +37,37 @@ Data is keyed as:
 - `lists:<userId>`   — the user's custom list categories and items
 - `watched:<userId>` — an array of YouTube video IDs the user has marked watched
 - `google_rt:<userId>` — the user's Google refresh token (used to renew the ~1h Google access token; never sent to the browser)
+- `push_sub:<userId>` — the user's Web Push subscription for daily reminders (section 7); stores `{ userId, subscription }` — the `userId` is duplicated inside the value because the cron job reads these by prefix, not by key
 
 ---
 
 ## 3. Edge Function
 
-The backend lives in `supabase/functions/server/`. Deploy it after any code change:
+The backend's source lives at `supabase/functions/server/index.tsx`, but it's deployed
+under the slug `make-server-3fde14d4` (that's the URL path prefix the app itself uses).
+`supabase/config.toml` maps that mismatch and turns off the platform's own JWT gate:
+
+```toml
+project_id = "timeman"
+
+[functions.make-server-3fde14d4]
+entrypoint = "supabase/functions/server/index.tsx"
+verify_jwt = false
+```
+
+Both lines matter:
+- **`entrypoint`** — the CLI's default convention is `supabase/functions/<slug>/index.ts`,
+  which doesn't match this folder layout. Without it, `supabase functions deploy
+  make-server-3fde14d4` fails with `no such file or directory` looking for a
+  `supabase/functions/make-server-3fde14d4/` folder that doesn't exist.
+- **`verify_jwt = false`** — the function does its own per-route auth (the `api.use("*",
+  ...)` middleware in `index.tsx`), so routes like `/health` and CORS preflight `OPTIONS`
+  requests need to reach the function without a token. Left at the platform default
+  (`true`), Supabase's gateway 401s every request with no valid JWT *before the function
+  runs at all* — including every browser CORS preflight, since preflight requests never
+  carry one — which breaks the app entirely when called from a browser.
+
+Deploy after any code change:
 
 ```bash
 # Install the Supabase CLI if needed
@@ -54,11 +79,12 @@ supabase login
 # Link to the project
 supabase link --project-ref tmrlpfjjczwvrahisslp
 
-# Deploy the edge function
+# Deploy the edge function (reads supabase/config.toml for the two settings above)
 supabase functions deploy make-server-3fde14d4 --project-ref tmrlpfjjczwvrahisslp
 ```
 
-The function exposes these endpoints (all require a valid Supabase JWT as Bearer token):
+The function exposes these endpoints (all except `/health` require a valid Supabase JWT
+as Bearer token — checked by the function's own middleware, not the platform gateway):
 
 | Method | Path                                    | Description                    |
 |--------|-----------------------------------------|--------------------------------|
@@ -70,6 +96,9 @@ The function exposes these endpoints (all require a valid Supabase JWT as Bearer
 | PUT    | /make-server-3fde14d4/google/refresh-token | Store the user's Google refresh token (sent once, right after sign-in) |
 | GET    | /make-server-3fde14d4/google/access-token  | Exchange the stored refresh token for a fresh Google access token |
 | DELETE | /make-server-3fde14d4/google/refresh-token | Forget the stored token (sign-out) |
+| PUT    | /make-server-3fde14d4/push-subscription    | Store the user's Web Push subscription (see section 7) |
+| DELETE | /make-server-3fde14d4/push-subscription    | Forget it (reminders turned off) |
+| POST   | /make-server-3fde14d4/cron/send-daily      | Sends the daily reminder push to everyone subscribed — not user-authed, guarded by `X-Cron-Secret` instead (see section 7b) |
 
 ---
 
@@ -141,17 +170,25 @@ The edge function reads these from Deno's environment — Supabase injects them 
 
 These three need no configuration; Supabase provides them to every edge function.
 
-**You must add two secrets yourself** (they are how the function renews Google access).
-Use the *same* OAuth client whose ID/secret you pasted into Supabase in step 4b:
+**You must add secrets yourself** — two for Google access renewal, three for daily
+reminder push (section 7a/7b covers generating and setting the VAPID/CRON ones; this is
+just the summary). Use the *same* OAuth client whose ID/secret you pasted into Supabase
+in step 4b for the Google ones:
 
 ```bash
 supabase secrets set GOOGLE_CLIENT_ID=<client id> GOOGLE_CLIENT_SECRET=<client secret> \
   --project-ref tmrlpfjjczwvrahisslp
 ```
 
-(or Dashboard → Edge Functions → Secrets). Then redeploy the function (section 3).
-Without them `GET /google/access-token` answers `500 server_not_configured` and the app
-shows a "Retry" banner instead of renewing the token.
+| Variable            | Set up in  | Missing → |
+|---------------------|------------|-----------|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | section 4/4b | `GET /google/access-token` answers `500 server_not_configured`; app shows "Retry" |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | section 7a | `POST /cron/send-daily` answers `500 server_not_configured` |
+| `CRON_SECRET`       | section 7b | same — checked before the VAPID keys, so this alone being unset also 500s |
+
+(or Dashboard → Edge Functions → Secrets). Secrets apply immediately — no redeploy
+needed — so if a route still answers `server_not_configured` after setting one, the
+name most likely doesn't match exactly (check with `supabase secrets list`).
 
 ---
 
@@ -182,17 +219,117 @@ https://supabase.com/dashboard/project/tmrlpfjjczwvrahisslp/auth/url-configurati
 
 ---
 
-## 7. PWA / Push Notifications
+## 7. Daily Reminder Push Notifications
 
-The app uses the Web Notifications API (`new Notification(…)`). This requires:
+The app sends a real Web Push notification once a day — it works even when the app
+isn't open, unlike a plain `new Notification(...)` call (which only fires while a tab
+happens to be open, and which also can't legally be triggered outside a direct click
+handler — browsers silently ignore `Notification.requestPermission()` calls made from
+anywhere else, e.g. a page-load effect).
 
-1. The user grants notification permission when prompted.
-2. The app must be open (or at least recently active) in the browser to fire the notification.
-3. A "video of the day" notification fires once per calendar day, tracked via localStorage key `reel.last_notif_date`.
+**How it fits together:**
 
-For true background push notifications (when the app is closed), you would need:
-- A Push API subscription + Service Worker
-- A backend job (e.g., a Supabase scheduled edge function) to send push messages daily
+1. The person clicks "Get daily reminders" on the Playlists page (`src/lib/push.ts`,
+   `subscribeToPush`). That click is what lets `Notification.requestPermission()` actually
+   show the browser's prompt.
+2. On approval, the browser creates a Push subscription (`PushManager.subscribe`) using
+   the app's VAPID public key, and the app `PUT`s it to `/push-subscription`, where it's
+   stored as `push_sub:<userId>`.
+3. Once a day, something calls `POST /cron/send-daily` (section 7b sets this up) with a
+   shared secret header. The function loads every stored subscription and sends each one
+   an **empty-body** push using a VAPID JWT it signs itself
+   (`supabase/functions/server/vapid.ts`).
+4. The service worker's `push` handler (`public/sw.js`) shows a fixed notification —
+   "Your random video of the day is ready — open TaskMan to watch it." Tapping it opens
+   or focuses the app.
+
+**Why an empty push, with no title/video baked in:** sending a real payload requires
+encrypting it (RFC 8291), and the obvious way to do that — the `npm:web-push` package —
+hits a still-open Deno bug in its AES128GCM path
+([denoland/deno#19002](https://github.com/denoland/deno/issues/19002): it throws
+`BadResource` at `Cipheriv.final()` under Deno's Node-compat `node:crypto`). An empty
+push needs no encryption at all, so this sidesteps the bug entirely — at the cost of the
+notification text being generic rather than naming that day's actual pick.
+
+### 7a. One-time setup: VAPID keys
+
+A VAPID key pair was generated for this project with the Web Crypto API (ECDSA P-256) —
+not `npx web-push generate-vapid-keys`, since only the public key needs to be portable
+JSON; the private key is consumed directly as a JWK by `vapid.ts`. **If you want your own
+keys instead of reusing the ones already wired into this project**, generate a fresh pair
+(Node 20+, needs no packages):
+
+```bash
+node -e '
+crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign","verify"]).then(async (kp) => {
+  console.log("PUBLIC =", Buffer.from(await crypto.subtle.exportKey("raw", kp.publicKey)).toString("base64url"))
+  console.log("PRIVATE_JWK =", JSON.stringify(await crypto.subtle.exportKey("jwk", kp.privateKey)))
+})'
+```
+
+Then:
+- Paste `PUBLIC` into `VAPID_PUBLIC_KEY` in `src/lib/push.ts` (it's not a secret — every
+  browser needs it to create a subscription).
+- Set both as Supabase function secrets (the private one *is* a secret):
+
+```bash
+supabase secrets set VAPID_PUBLIC_KEY=<PUBLIC> --project-ref tmrlpfjjczwvrahisslp
+supabase secrets set VAPID_PRIVATE_KEY='<PRIVATE_JWK, the whole JSON string>' --project-ref tmrlpfjjczwvrahisslp
+supabase secrets set VAPID_SUBJECT="mailto:you@example.com" --project-ref tmrlpfjjczwvrahisslp
+```
+
+`VAPID_SUBJECT` is just an operator contact string push services may use if your traffic
+looks abusive — any `mailto:` or `https://` value works, it isn't verified.
+
+Anyone already subscribed under old keys will silently stop receiving pushes if you
+rotate them (their stored subscription is still valid, but a push signed with a
+different key pair than the one the browser subscribed with is rejected) — they'll need
+to toggle reminders off and back on once.
+
+### 7b. One-time setup: the daily schedule
+
+`/cron/send-daily` needs something to actually call it once a day. It's guarded by a
+shared secret (not a user JWT — there's no user making this request), so set that first:
+
+```bash
+supabase secrets set CRON_SECRET="<any long random string>" --project-ref tmrlpfjjczwvrahisslp
+```
+
+Then schedule the call. The simplest option is `pg_cron` + `pg_net`, run once in the
+project's SQL Editor:
+
+```sql
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+select cron.schedule(
+  'taskman-daily-reminder',
+  '0 9 * * *',  -- pg_cron runs in UTC — pick the UTC hour that matches when you want it to land locally
+  $$
+  select net.http_post(
+    url := 'https://tmrlpfjjczwvrahisslp.supabase.co/functions/v1/make-server-3fde14d4/cron/send-daily',
+    headers := jsonb_build_object('X-Cron-Secret', '<the same CRON_SECRET you set above>'),
+    timeout_milliseconds := 15000
+  );
+  $$
+);
+```
+
+(Any other scheduler that can make an HTTPS POST with a custom header once a day works
+too — e.g. GitHub Actions on a `schedule` trigger, or a third-party cron service — if you'd
+rather not enable `pg_cron`.)
+
+You can trigger it manually to test without waiting for the schedule:
+
+```bash
+curl -X POST https://tmrlpfjjczwvrahisslp.supabase.co/functions/v1/make-server-3fde14d4/cron/send-daily \
+  -H "X-Cron-Secret: <your CRON_SECRET>"
+```
+
+It responds `{ "total": N, "sent": N, "removed": N, "failed": N }` — `removed` counts
+subscriptions the push service reported as gone (permission revoked, browser data
+cleared) and that the function deleted; `failed` is a transient error, left in place to
+retry the next day.
 
 ---
 
@@ -225,6 +362,9 @@ supabase functions serve    # Runs edge functions locally
 | `src/lib/auth.ts`                         | Google OAuth sign-in/out, refresh-token hand-off, silent access-token renewal |
 | `src/lib/store.ts`                        | Edge function calls for lists + watched IDs      |
 | `src/lib/google.ts`                       | Google Calendar and YouTube API calls (incl. random video search) |
-| `supabase/functions/server/index.tsx`     | Edge function routes (lists, watched, Google token renewal, health) |
+| `src/lib/push.ts`                         | Web Push subscribe/unsubscribe + VAPID public key (see section 7) |
+| `supabase/functions/server/index.tsx`     | Edge function routes (lists, watched, Google token renewal, push subscriptions, cron, health) |
 | `supabase/functions/server/kv_store.tsx`  | Auto-generated KV store client (do not edit)     |
+| `supabase/functions/server/vapid.ts`      | VAPID JWT signing + empty-push sender for daily reminders (see section 7) |
+| `supabase/config.toml`                    | Maps the `make-server-3fde14d4` deploy slug to the `server/` folder; disables the platform JWT gate (see section 3) |
 | `utils/supabase/info.tsx`                 | Auto-generated project ID + anon key (do not edit)|

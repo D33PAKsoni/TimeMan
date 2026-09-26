@@ -3,6 +3,7 @@ import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as kv from "./kv_store.tsx";
+import { sendEmptyPush, type PushSubscription } from "./vapid.ts";
 
 const PREFIX = "/make-server-3fde14d4";
 const app = new Hono();
@@ -140,6 +141,95 @@ api.get("/google/access-token", async (c) => {
   }
 
   return c.json({ access_token: data.access_token, expires_in: data.expires_in });
+});
+
+// ── Push subscriptions (daily reminder) ──────────────────────────────────────
+// Stores each user's Web Push subscription so /cron/send-daily (below) can
+// reach them. The userId lives inside the stored value too, since kv.getByPrefix
+// only returns values, not keys — the cron job needs it to remove dead subscriptions.
+const pushKey = (userId: string) => `push_sub:${userId}`;
+const MAX_ENDPOINT_LEN = 2048;
+const MAX_KEY_LEN = 256;
+
+function isValidSubscription(s: any): s is PushSubscription {
+  return (
+    s &&
+    typeof s.endpoint === "string" &&
+    s.endpoint.length > 0 &&
+    s.endpoint.length <= MAX_ENDPOINT_LEN &&
+    /^https:\/\//.test(s.endpoint) &&
+    s.keys &&
+    typeof s.keys.p256dh === "string" &&
+    s.keys.p256dh.length > 0 &&
+    s.keys.p256dh.length <= MAX_KEY_LEN &&
+    typeof s.keys.auth === "string" &&
+    s.keys.auth.length > 0 &&
+    s.keys.auth.length <= MAX_KEY_LEN
+  );
+}
+
+api.put("/push-subscription", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!isValidSubscription(body?.subscription)) return c.json({ error: "invalid subscription" }, 400);
+  const userId = c.get("userId");
+  await kv.set(pushKey(userId), { userId, subscription: body.subscription });
+  return c.json({ ok: true });
+});
+
+api.delete("/push-subscription", async (c) => {
+  await kv.del(pushKey(c.get("userId")));
+  return c.json({ ok: true });
+});
+
+// ── Daily reminder cron ───────────────────────────────────────────────────────
+// Registered on `app` directly, and BEFORE app.route(PREFIX, api) below — same
+// reason /health is registered before it too: app.route(PREFIX, api) claims the
+// entire "/make-server-3fde14d4/*" namespace via api's own catch-all auth
+// middleware (api.use("*", ...)), which 401s any request under that prefix with
+// no user JWT before Hono ever looks for a more specific route. A route added
+// on `app` AFTER that mount would never be reached; adding it before means Hono
+// matches this exact path first. This route isn't per-user, so it has no
+// Supabase user JWT to check anyway — it's protected instead by a shared secret
+// header, set once by whoever configures the schedule (see SUPABASE_SETUP.md).
+// Sends every stored subscription an EMPTY push (see vapid.ts for why); the
+// service worker's own `push` handler supplies the actual notification text.
+app.post(`${PREFIX}/cron/send-daily`, async (c) => {
+  const cronSecret = Deno.env.get("CRON_SECRET");
+  if (!cronSecret) return c.json({ error: "server_not_configured" }, 500);
+  if (c.req.header("X-Cron-Secret") !== cronSecret) return c.json({ error: "unauthorized" }, 401);
+
+  const publicKey = Deno.env.get("VAPID_PUBLIC_KEY");
+  const privateJwkRaw = Deno.env.get("VAPID_PRIVATE_KEY");
+  if (!publicKey || !privateJwkRaw) return c.json({ error: "server_not_configured" }, 500);
+  let privateJwk: JsonWebKey;
+  try {
+    privateJwk = JSON.parse(privateJwkRaw);
+  } catch {
+    return c.json({ error: "server_not_configured" }, 500);
+  }
+  const subject = Deno.env.get("VAPID_SUBJECT") || "mailto:admin@example.com";
+
+  const rows: { userId: string; subscription: PushSubscription }[] = await kv.getByPrefix("push_sub:");
+  let sent = 0, removed = 0, failed = 0;
+  for (const row of rows) {
+    try {
+      const res = await sendEmptyPush(row.subscription, { privateJwk, publicKey, subject });
+      if (res.status === 404 || res.status === 410) {
+        // Subscription is gone (browser data cleared, permission revoked, etc.) — forget it.
+        await kv.del(pushKey(row.userId));
+        removed++;
+      } else if (res.ok) {
+        sent++;
+      } else {
+        failed++;
+        console.log("push send failed", row.userId, res.status);
+      }
+    } catch (e) {
+      failed++;
+      console.log("push send error", row.userId, e instanceof Error ? e.message : e);
+    }
+  }
+  return c.json({ total: rows.length, sent, removed, failed });
 });
 
 app.route(PREFIX, api);

@@ -46,3 +46,33 @@ self.addEventListener("fetch", (event) => {
       .catch(() => caches.match(request).then((cached) => cached || Response.error()))
   );
 });
+
+// The daily reminder push carries no payload (see supabase/functions/server/vapid.ts
+// for why — briefly, encrypting a payload hits a still-open Deno bug, so the server
+// sends an empty push and this fixed notification stands in for the real content).
+// event.data is always null here; there's nothing to read from it.
+self.addEventListener("push", (event) => {
+  event.waitUntil(
+    self.registration.showNotification("TaskMan", {
+      body: "Your random video of the day is ready — open TaskMan to watch it.",
+      icon: "/icon.svg",
+      badge: "/icon.svg",
+      tag: "daily-video",
+      renotify: true,
+      data: { url: "/" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (new URL(client.url).origin === self.location.origin && "focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
+});

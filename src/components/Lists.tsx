@@ -25,7 +25,7 @@ import {
   Star,
   List as ListGlyph,
 } from "lucide-react"
-import type { ListCategory, ListKind } from "../data/mock"
+import { PRIORITY_LEVELS, priorityColor, type ListCategory, type ListKind, type Priority } from "../data/mock"
 
 // Icon registry. The first four keys are the built-in list kinds; the rest are
 // offered in the "New list" picker. Unknown keys fall back to a generic list icon.
@@ -69,6 +69,7 @@ export default function Lists({
   onDelete,
   onAddTag,
   onRemoveTag,
+  onSetPriority,
   onCreateList,
   onDeleteList,
   onSave,
@@ -81,6 +82,7 @@ export default function Lists({
   onDelete: (catId: string, itemId: string) => void
   onAddTag: (catId: string, itemId: string, tag: string) => void
   onRemoveTag: (catId: string, itemId: string, tag: string) => void
+  onSetPriority: (catId: string, itemId: string, priority: Priority | undefined) => void
   onCreateList: (name: string, kind: ListKind, accent: string) => string
   onDeleteList: (catId: string) => void
   onSave: () => void
@@ -356,7 +358,15 @@ export default function Lists({
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.97 }}
-                className="group flex items-start gap-4 rounded-2xl border border-border bg-surface p-4 hover:border-border-strong transition"
+                className="group flex items-start gap-4 rounded-2xl border p-4 transition"
+                style={
+                  item.priority
+                    ? {
+                        borderColor: priorityColor(item.priority),
+                        background: "color-mix(in oklab, " + priorityColor(item.priority) + " 8%, var(--color-surface))",
+                      }
+                    : { borderColor: "var(--color-border)", background: "var(--color-surface)" }
+                }
               >
                 <button
                   onClick={() => onToggle(cat.id, item.id)}
@@ -375,6 +385,24 @@ export default function Lists({
                   {item.note && <div className="text-sm text-muted mt-0.5">{item.note}</div>}
 
                   <div className="flex gap-1.5 mt-2 flex-wrap items-center">
+                    <select
+                      value={item.priority ?? ""}
+                      onChange={(e) => onSetPriority(cat.id, item.id, (e.target.value || undefined) as Priority | undefined)}
+                      aria-label={`Priority for ${item.title}`}
+                      className="rounded-md border bg-elevated px-1.5 py-0.5 font-mono text-[11px] outline-none cursor-pointer"
+                      style={{
+                        borderColor: item.priority ? priorityColor(item.priority) : "var(--color-border)",
+                        color: item.priority ? priorityColor(item.priority) : "var(--color-muted-2)",
+                      }}
+                    >
+                      <option value="">No priority</option>
+                      {PRIORITY_LEVELS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+
                     {item.tags.map((t) => (
                       <span
                         key={t}

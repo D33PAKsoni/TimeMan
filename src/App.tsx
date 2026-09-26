@@ -10,9 +10,8 @@ import { supabase } from "./lib/supabase"
 import { signInWithGoogle, signOut, cacheProviderToken, saveGoogleRefreshToken, withGoogleToken, GoogleAuthError } from "./lib/auth"
 import { fetchPlaylists, fetchRandomVideo, createCalendarEvent, deletePlaylistItem } from "./lib/google"
 import { loadLists, saveLists, loadWatched, addWatched, loadDailyVideo, saveDailyVideo } from "./lib/store"
-import { defaultLists, type DailyVideo, type ListCategory, type ListKind, type Playlist } from "./data/mock"
-
-const NOTIF_DATE_KEY = "reel.last_notif_date"
+import { getPushStatus, subscribeToPush, unsubscribeFromPush, type PushStatus } from "./lib/push"
+import { defaultLists, defaultTodoList, type DailyVideo, type ListCategory, type ListKind, type Playlist, type Priority } from "./data/mock"
 
 type View = "lists" | "playlists"
 
@@ -98,8 +97,20 @@ export default function App() {
       try {
         const stored = await loadLists()
         if (cancelled) return
-        if (stored?.length) setLists(stored)
-        else await saveLists(defaultLists)
+        if (stored?.length) {
+          // Accounts created before the ToDo default existed won't have it in
+          // their saved lists — add it (without touching anything else) so it
+          // still becomes the default tab on open, same as a fresh account.
+          if (stored.some((c) => c.id === "todo")) {
+            setLists(stored)
+          } else {
+            const withTodo = [defaultTodoList, ...stored]
+            setLists(withTodo)
+            saveLists(withTodo).catch(() => {})
+          }
+        } else {
+          await saveLists(defaultLists)
+        }
       } catch {
         /* keep local lists */
       }
@@ -160,31 +171,35 @@ export default function App() {
     else setDaily(null)
   }, [userId, rollDaily])
 
-  // Daily "video of the day" notification — fires once per calendar day.
-  // Uses localStorage so it survives page reloads and works after re-auth.
+  // Daily reminders (real, server-sent push — see supabase/functions/server/vapid.ts
+  // and SUPABASE_SETUP.md). This only ever reads the current permission/subscription
+  // state; it never calls Notification.requestPermission() itself, because browsers
+  // silently ignore that call unless it happens inside a direct click handler — see
+  // togglePush below, wired to the toggle in the Playlists header.
+  const [pushStatus, setPushStatus] = useState<PushStatus>("off")
   useEffect(() => {
-    if (!userId || !daily) return
-    const today = new Date().toDateString()
-    if (localStorage.getItem(NOTIF_DATE_KEY) === today) return
-    if (!("Notification" in window)) return
-    const fire = () => {
-      try {
-        new Notification("TaskMan — random video of the day", {
-          body: daily.title,
-          icon: "/icon.svg",
-        })
-        localStorage.setItem(NOTIF_DATE_KEY, today)
-      } catch {
-        /* notifications unavailable */
+    if (!userId) return
+    let cancelled = false
+    getPushStatus().then((s) => { if (!cancelled) setPushStatus(s) })
+    return () => { cancelled = true }
+  }, [userId])
+
+  async function togglePush() {
+    try {
+      if (pushStatus === "on") {
+        await unsubscribeFromPush()
+        setPushStatus("off")
+        notify("Daily reminders turned off")
+      } else {
+        const next = await subscribeToPush()
+        setPushStatus(next)
+        if (next === "on") notify("Daily reminders on — you'll get a push once a day")
+        else if (next === "denied") notify("Notifications are blocked for this site in your browser settings")
       }
+    } catch {
+      notify("Couldn't update daily reminders — try again")
     }
-    if (Notification.permission === "granted") fire()
-    else if (Notification.permission === "default") {
-      Notification.requestPermission()
-        .then((p) => { if (p === "granted") fire() })
-        .catch(() => {})
-    }
-  }, [userId, daily])
+  }
 
   function notify(msg: string) {
     setToast(msg)
@@ -217,6 +232,10 @@ export default function App() {
 
   function removeTag(catId: string, itemId: string, tag: string) {
     mapItems(catId, (items) => items.map((i) => (i.id === itemId ? { ...i, tags: i.tags.filter((t) => t !== tag) } : i)))
+  }
+
+  function setPriority(catId: string, itemId: string, priority: Priority | undefined) {
+    mapItems(catId, (items) => items.map((i) => (i.id === itemId ? { ...i, priority } : i)))
   }
 
   // Returns the new list's id so the Lists screen can switch to it.
@@ -426,6 +445,7 @@ export default function App() {
                   onDelete={deleteItem}
                   onAddTag={addTag}
                   onRemoveTag={removeTag}
+                  onSetPriority={setPriority}
                   onCreateList={createList}
                   onDeleteList={deleteList}
                   onSave={manualSync}
@@ -442,6 +462,8 @@ export default function App() {
                   onDailyWatched={markDailyWatched}
                   onDailyRemind={() => daily && remindTitle(`Watch: ${daily.title}`)}
                   onDailyShuffle={() => void rollDaily(true)}
+                  pushStatus={pushStatus}
+                  onTogglePush={togglePush}
                   onWatched={markWatched}
                   onRemind={remindVideo}
                   onRemove={removeVideo}

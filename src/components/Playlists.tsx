@@ -1,7 +1,8 @@
 import { useState } from "react"
 import { motion, AnimatePresence } from "motion/react"
-import { Check, Play, Clock, AlarmClock, Sparkles, Trash2, Loader2, Shuffle, ChevronDown, ListVideo } from "lucide-react"
+import { Check, Play, Clock, AlarmClock, Sparkles, Trash2, Loader2, Shuffle, ChevronDown, ListVideo, Bell, BellOff, BellRing } from "lucide-react"
 import type { DailyVideo, Playlist, Video } from "../data/mock"
+import type { PushStatus } from "../lib/push"
 
 const watchUrl = (id: string) => `https://www.youtube.com/watch?v=${id}`
 
@@ -201,6 +202,8 @@ export default function Playlists({
   onDailyWatched,
   onDailyRemind,
   onDailyShuffle,
+  pushStatus,
+  onTogglePush,
   onWatched,
   onRemind,
   onRemove,
@@ -213,10 +216,19 @@ export default function Playlists({
   onDailyWatched: () => void
   onDailyRemind: () => void
   onDailyShuffle: () => void
+  pushStatus: PushStatus
+  onTogglePush: () => void
   onWatched: (playlistId: string, videoId: string) => void
   onRemind: (playlistId: string, videoId: string) => void
   onRemove: (playlistId: string, videoId: string) => void
 }) {
+  const reminderCopy: Record<PushStatus, { label: string; title: string; icon: any; disabled: boolean }> = {
+    on: { label: "Reminders on", title: "Turn off daily reminders", icon: BellRing, disabled: false },
+    off: { label: "Get daily reminders", title: "Get a push notification once a day", icon: Bell, disabled: false },
+    denied: { label: "Reminders blocked", title: "Notifications are blocked for this site — check your browser's site settings", icon: BellOff, disabled: true },
+    unsupported: { label: "Reminders unsupported", title: "This browser doesn't support push notifications", icon: BellOff, disabled: true },
+  }
+  const reminder = reminderCopy[pushStatus]
   return (
     <div className="space-y-8">
       <div className="flex items-end justify-between gap-4 flex-wrap">
@@ -224,6 +236,19 @@ export default function Playlists({
           <div className="font-mono text-xs uppercase tracking-widest text-muted-2">From YouTube</div>
           <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight mt-1">Playlists</h1>
         </div>
+        <button
+          onClick={onTogglePush}
+          disabled={reminder.disabled}
+          title={reminder.title}
+          aria-pressed={pushStatus === "on"}
+          className={
+            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed " +
+            (pushStatus === "on" ? "border-primary/40 text-primary bg-primary/10" : "border-border text-muted hover:border-border-strong")
+          }
+        >
+          <reminder.icon className="h-4 w-4" />
+          {reminder.label}
+        </button>
       </div>
 
       {/* Random video of the day */}
