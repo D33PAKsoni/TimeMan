@@ -4,7 +4,7 @@ import { supabase, SERVER_URL } from "./supabase"
 // every browser (it's the "applicationServerKey" a push subscription is created
 // with). Its matching private key lives only as a Supabase function secret; see
 // SUPABASE_SETUP.md for how the pair was generated and where each half goes.
-export const VAPID_PUBLIC_KEY = "BEIgARa7eW8oEV0JiD0TP6TGvULJAhvi29Tzeg7YSHe4u_HgARQJkXSJtONQzLW_i9GvE-fFwjRDMJfmFpY2wnY"
+export const VAPID_PUBLIC_KEY = "BIjh2rE7M8zjDDkC5mzFyhk4gL4a7IPcJDflfak8lal8ZNichfxvGtUc2uYa8cS0a7JZdWNKwCb7zkPQBvRwZ6o"
 
 export type PushStatus = "unsupported" | "denied" | "off" | "on"
 
