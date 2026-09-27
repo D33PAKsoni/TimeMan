@@ -80,7 +80,7 @@
 *.woff               filter=lfs diff=lfs merge=lfs -text
 *.woff2              filter=lfs diff=lfs merge=lfs -text
 *.eot                filter=lfs diff=lfs merge=lfs -text
-
+.env.secrets
 # ---------------------------------------------------------------------------
 # Data & Machine Learning
 # ---------------------------------------------------------------------------
