@@ -6,7 +6,7 @@
 // load-blocking: if the server call fails the app degrades silently.
 import { SERVER_URL } from "./supabase"
 import { supabase } from "./supabase"
-import type { DailyVideo, ListCategory } from "../data/mock"
+import type { DailyPick, ListCategory } from "../data/mock"
 
 const LS_LISTS_KEY = "reel.lists"
 const LS_WATCHED_KEY = "reel.watched"
@@ -96,23 +96,24 @@ export async function addWatched(videoId: string): Promise<void> {
   }
 }
 
-// ── Daily random video ────────────────────────────────────────────────────────
-// One pick per calendar day, remembered locally so reloads don't burn search quota
-// (each search costs 100 units) or change the video under the user.
+// ── Daily video pick ──────────────────────────────────────────────────────────
+// One pick per calendar day, remembered locally (just which playlist/video, not
+// the video's data — that's always read live from Playlist state) so reloads
+// don't change the pick out from under the user partway through the day.
 
 const todayKey = () => new Date().toDateString()
 
-export function loadDailyVideo(): DailyVideo | null {
+export function loadDailyPick(): DailyPick | null {
   try {
     const raw = localStorage.getItem(LS_DAILY_KEY)
     if (!raw) return null
-    const { date, video } = JSON.parse(raw) as { date: string; video: DailyVideo }
-    return date === todayKey() && video?.id ? video : null
+    const { date, pick } = JSON.parse(raw) as { date: string; pick: DailyPick }
+    return date === todayKey() && pick?.playlistId && pick?.videoId ? pick : null
   } catch {
     return null
   }
 }
 
-export function saveDailyVideo(video: DailyVideo): void {
-  localStorage.setItem(LS_DAILY_KEY, JSON.stringify({ date: todayKey(), video }))
+export function saveDailyPick(pick: DailyPick): void {
+  localStorage.setItem(LS_DAILY_KEY, JSON.stringify({ date: todayKey(), pick }))
 }

@@ -1,17 +1,17 @@
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { motion, AnimatePresence } from "motion/react"
 import type { Session } from "@supabase/supabase-js"
-import { ListChecks, ListVideo, LogOut, Check } from "lucide-react"
+import { ListChecks, ListVideo, LogOut, Check, BellRing } from "lucide-react"
 import Login from "./components/Login"
 import Lists from "./components/Lists"
 import Playlists from "./components/Playlists"
 import SyncDialog, { type SyncRequest } from "./components/SyncDialog"
 import { supabase } from "./lib/supabase"
 import { signInWithGoogle, signOut, cacheProviderToken, saveGoogleRefreshToken, withGoogleToken, GoogleAuthError } from "./lib/auth"
-import { fetchPlaylists, fetchRandomVideo, createCalendarEvent, deletePlaylistItem } from "./lib/google"
-import { loadLists, saveLists, loadWatched, addWatched, loadDailyVideo, saveDailyVideo } from "./lib/store"
+import { fetchPlaylists, createCalendarEvent, deletePlaylistItem } from "./lib/google"
+import { loadLists, saveLists, loadWatched, addWatched, loadDailyPick, saveDailyPick } from "./lib/store"
 import { getPushStatus, subscribeToPush, unsubscribeFromPush, type PushStatus } from "./lib/push"
-import { defaultLists, defaultTodoList, type DailyVideo, type ListCategory, type ListKind, type Playlist, type Priority } from "./data/mock"
+import { defaultLists, defaultTodoList, type DailyPick, type ListCategory, type ListKind, type Playlist, type Priority, type Video } from "./data/mock"
 
 type View = "lists" | "playlists"
 
@@ -32,6 +32,17 @@ function toUser(session: Session): AppUser {
 }
 
 type DialogState = { request: SyncRequest; run: (start: Date, durationMin: number) => void } | null
+
+// Picks a random unwatched video from the user's own playlists — never anything
+// fetched from elsewhere on YouTube. `exclude` lets Shuffle avoid re-picking the
+// video currently shown (falling back to it anyway if it's the only option left).
+function pickRandomVideo(pls: Playlist[], exclude?: DailyPick): DailyPick | null {
+  const candidates = pls.flatMap((p) => p.videos.filter((v) => !v.watched).map((v) => ({ playlistId: p.id, videoId: v.id })))
+  if (!candidates.length) return null
+  const pool = exclude ? candidates.filter((c) => !(c.playlistId === exclude.playlistId && c.videoId === exclude.videoId)) : candidates
+  const from = pool.length ? pool : candidates
+  return from[Math.floor(Math.random() * from.length)]
+}
 
 // What to tell the user when a Google call fails, and whether re-consent would help.
 function describeGoogleError(e: unknown): { message: string; kind: "reconnect" | "retry" } {
@@ -58,9 +69,7 @@ export default function App() {
   const [lists, setLists] = useState<ListCategory[]>(defaultLists)
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loadingPlaylists, setLoadingPlaylists] = useState(true)
-  const [daily, setDaily] = useState<DailyVideo | null>(null)
-  const [dailyLoading, setDailyLoading] = useState(false)
-  const [dailyError, setDailyError] = useState<string | null>(null)
+  const [dailyPick, setDailyPick] = useState<DailyPick | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [demo, setDemo] = useState(false)
@@ -141,35 +150,42 @@ export default function App() {
     }
   }, [userId])
 
-  // Random video of the day: one pick per calendar day (cached locally); `force` re-rolls.
-  const rollDaily = useCallback(async (force: boolean) => {
-    if (!force) {
-      const cached = loadDailyVideo()
-      if (cached) {
-        setDaily(cached)
-        return
-      }
-    }
-    setDailyLoading(true)
-    setDailyError(null)
-    try {
-      const watched = new Set(await loadWatched())
-      const video = await withGoogleToken((token) => fetchRandomVideo(token, watched))
-      saveDailyVideo(video)
-      setDaily(video)
-    } catch (e) {
-      console.error("[TaskMan] Random video failed:", e)
-      setDailyError(describeGoogleError(e).message)
-      if (force) notify("Couldn't fetch another video")
-    } finally {
-      setDailyLoading(false)
-    }
-  }, [])
+  // Video of the day: a random pick from the user's own playlists (never fetched
+  // from elsewhere on YouTube), kept stable for the whole calendar day. Re-validated
+  // whenever playlists change, so removing the picked video anywhere (including via
+  // its own Remove button) transparently rolls a new one instead of showing a gap.
+  useEffect(() => {
+    setDailyPick(userId ? loadDailyPick() : null)
+  }, [userId])
 
   useEffect(() => {
-    if (userId) void rollDaily(false)
-    else setDaily(null)
-  }, [userId, rollDaily])
+    if (!userId || loadingPlaylists) return
+    const stillValid = !!dailyPick && playlists.some((p) => p.id === dailyPick.playlistId && p.videos.some((v) => v.id === dailyPick.videoId))
+    if (stillValid) return
+    const fresh = pickRandomVideo(playlists)
+    setDailyPick(fresh)
+    if (fresh) saveDailyPick(fresh)
+  }, [userId, loadingPlaylists, playlists, dailyPick])
+
+  function shuffleDaily() {
+    const fresh = pickRandomVideo(playlists, dailyPick ?? undefined)
+    if (!fresh) {
+      notify("No other videos in your playlists right now")
+      return
+    }
+    setDailyPick(fresh)
+    saveDailyPick(fresh)
+  }
+
+  // The actual video the pointer resolves to, read live from playlist state so its
+  // watched status always matches what's shown in the playlist itself.
+  const dailyVideo: (Video & { playlistId: string }) | null = (() => {
+    if (!dailyPick) return null
+    const video = playlists.find((p) => p.id === dailyPick.playlistId)?.videos.find((v) => v.id === dailyPick.videoId)
+    return video ? { ...video, playlistId: dailyPick.playlistId } : null
+  })()
+  const hasAnyVideos = playlists.some((p) => p.videos.length > 0)
+  const hasEligibleVideo = playlists.some((p) => p.videos.some((v) => !v.watched))
 
   // Daily reminders (real, server-sent push — see supabase/functions/server/vapid.ts
   // and SUPABASE_SETUP.md). This only ever reads the current permission/subscription
@@ -177,10 +193,17 @@ export default function App() {
   // silently ignore that call unless it happens inside a direct click handler — see
   // togglePush below, wired to the toggle in the Playlists header.
   const [pushStatus, setPushStatus] = useState<PushStatus>("off")
+  const [pushChecked, setPushChecked] = useState(false) // avoids flashing the nudge before we know the real status
+  // "Not now" on the nudge banner is remembered on this device, so it doesn't nag every visit.
+  const [pushNudgeDismissed, setPushNudgeDismissed] = useState(() => localStorage.getItem("reel.push_nudge_dismissed") === "1")
+  function dismissPushNudge() {
+    localStorage.setItem("reel.push_nudge_dismissed", "1")
+    setPushNudgeDismissed(true)
+  }
   useEffect(() => {
     if (!userId) return
     let cancelled = false
-    getPushStatus().then((s) => { if (!cancelled) setPushStatus(s) })
+    getPushStatus().then((s) => { if (!cancelled) { setPushStatus(s); setPushChecked(true) } })
     return () => { cancelled = true }
   }, [userId])
 
@@ -318,14 +341,6 @@ export default function App() {
     notify("Marked as watched")
   }
 
-  function markDailyWatched() {
-    if (!daily) return
-    const next = { ...daily, watched: true }
-    setDaily(next)
-    saveDailyVideo(next)
-    if (session) addWatched(daily.id).catch(() => {})
-    notify("Marked as watched")
-  }
 
   async function removeVideo(plId: string, vId: string) {
     const video = playlists.find((p) => p.id === plId)?.videos.find((v) => v.id === vId)
@@ -428,6 +443,25 @@ export default function App() {
               </button>
             </div>
           )}
+          {pushChecked && pushStatus === "off" && !pushNudgeDismissed && (
+            <div className="mb-5 flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm">
+              <BellRing className="h-4 w-4 shrink-0 text-primary" />
+              <div className="flex-1 min-w-0">Get a daily reminder to watch something from your playlists?</div>
+              <button
+                onClick={togglePush}
+                className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:brightness-110 active:scale-[.98] transition"
+              >
+                Turn on
+              </button>
+              <button
+                onClick={dismissPushNudge}
+                aria-label="Dismiss"
+                className="shrink-0 rounded-lg px-2 py-1.5 text-xs text-muted hover:text-foreground transition"
+              >
+                Not now
+              </button>
+            </div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
               key={view}
@@ -456,12 +490,10 @@ export default function App() {
                 <Playlists
                   playlists={playlists}
                   loading={loadingPlaylists}
-                  daily={daily}
-                  dailyLoading={dailyLoading}
-                  dailyError={dailyError}
-                  onDailyWatched={markDailyWatched}
-                  onDailyRemind={() => daily && remindTitle(`Watch: ${daily.title}`)}
-                  onDailyShuffle={() => void rollDaily(true)}
+                  dailyVideo={dailyVideo}
+                  dailyEmpty={!loadingPlaylists && !hasEligibleVideo}
+                  hasAnyVideos={hasAnyVideos}
+                  onDailyShuffle={shuffleDaily}
                   pushStatus={pushStatus}
                   onTogglePush={togglePush}
                   onWatched={markWatched}

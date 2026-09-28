@@ -1,15 +1,14 @@
 import { useState } from "react"
 import { motion, AnimatePresence } from "motion/react"
 import { Check, Play, Clock, AlarmClock, Sparkles, Trash2, Loader2, Shuffle, ChevronDown, ListVideo, Bell, BellOff, BellRing } from "lucide-react"
-import type { DailyVideo, Playlist, Video } from "../data/mock"
+import type { Playlist, Video } from "../data/mock"
 import type { PushStatus } from "../lib/push"
 
 const watchUrl = (id: string) => `https://www.youtube.com/watch?v=${id}`
 
 // The one set of actions every video gets — today's random pick and every video inside
-// an expanded playlist. `onRemove` only exists for playlist videos (the random pick
-// isn't in any playlist). `dense` collapses the secondary buttons to icons for the
-// narrower playlist cards.
+// an expanded playlist alike, since the daily pick is always a real playlist video too.
+// `dense` collapses the secondary buttons to icons for the narrower playlist cards.
 function VideoActions({
   videoId,
   watched,
@@ -23,7 +22,7 @@ function VideoActions({
   dense?: boolean
   onWatched: () => void
   onRemind: () => void
-  onRemove?: () => void
+  onRemove: () => void
 }) {
   const base = "flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition "
   const pad = dense ? "px-2.5 py-2 " : "px-3 py-2 "
@@ -61,15 +60,13 @@ function VideoActions({
         </>
       )}
 
-      {onRemove && (
-        <button
-          onClick={onRemove}
-          title="Remove from playlist"
-          className={base + "border border-error/40 text-error hover:bg-error/10 " + pad}
-        >
-          <Trash2 className="h-4 w-4" /> {!dense && "Remove"}
-        </button>
-      )}
+      <button
+        onClick={onRemove}
+        title="Remove from playlist"
+        className={base + "border border-error/40 text-error hover:bg-error/10 " + pad}
+      >
+        <Trash2 className="h-4 w-4" /> {!dense && "Remove"}
+      </button>
     </div>
   )
 }
@@ -196,11 +193,9 @@ function PlaylistCard({
 export default function Playlists({
   playlists,
   loading,
-  daily,
-  dailyLoading,
-  dailyError,
-  onDailyWatched,
-  onDailyRemind,
+  dailyVideo,
+  dailyEmpty,
+  hasAnyVideos,
   onDailyShuffle,
   pushStatus,
   onTogglePush,
@@ -210,11 +205,9 @@ export default function Playlists({
 }: {
   playlists: Playlist[]
   loading: boolean
-  daily: DailyVideo | null
-  dailyLoading: boolean
-  dailyError: string | null
-  onDailyWatched: () => void
-  onDailyRemind: () => void
+  dailyVideo: (Video & { playlistId: string }) | null
+  dailyEmpty: boolean
+  hasAnyVideos: boolean
   onDailyShuffle: () => void
   pushStatus: PushStatus
   onTogglePush: () => void
@@ -222,6 +215,7 @@ export default function Playlists({
   onRemind: (playlistId: string, videoId: string) => void
   onRemove: (playlistId: string, videoId: string) => void
 }) {
+  const dailyPlaylistName = dailyVideo ? playlists.find((p) => p.id === dailyVideo.playlistId)?.name : undefined
   const reminderCopy: Record<PushStatus, { label: string; title: string; icon: any; disabled: boolean }> = {
     on: { label: "Reminders on", title: "Turn off daily reminders", icon: BellRing, disabled: false },
     off: { label: "Get daily reminders", title: "Get a push notification once a day", icon: Bell, disabled: false },
@@ -251,74 +245,68 @@ export default function Playlists({
         </button>
       </div>
 
-      {/* Random video of the day */}
-      {daily ? (
+      {/* Video of the day, picked from the user's own playlists */}
+      {dailyVideo ? (
         <motion.section
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className={
-            "overflow-hidden rounded-2xl border border-primary/30 bg-primary/5 transition-opacity " +
-            (dailyLoading ? "opacity-60" : "")
-          }
+          className="overflow-hidden rounded-2xl border border-primary/30 bg-primary/5"
         >
           <div className="flex flex-col sm:flex-row">
             <a
-              href={watchUrl(daily.id)}
+              href={watchUrl(dailyVideo.id)}
               target="_blank"
               rel="noreferrer"
               className="relative block sm:w-64 shrink-0 aspect-video bg-elevated"
             >
-              <img src={daily.thumb} alt={daily.title} className="h-full w-full object-cover" />
+              <img src={dailyVideo.thumb} alt={dailyVideo.title} className="h-full w-full object-cover" />
               <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[11px]">
-                {daily.duration}
+                {dailyVideo.duration}
               </span>
             </a>
             <div className="flex-1 min-w-0 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-1 font-mono text-[11px] uppercase tracking-widest text-primary">
-                  <Sparkles className="h-3 w-3" /> Random video of the day
+                  <Sparkles className="h-3 w-3" /> Video of the day
                 </div>
                 <button
                   onClick={onDailyShuffle}
-                  disabled={dailyLoading}
-                  title="Pick a different random video"
-                  aria-label="Pick a different random video"
-                  className="grid h-8 w-8 place-items-center rounded-full border border-border text-muted hover:border-border-strong hover:text-foreground transition disabled:opacity-60"
+                  title="Pick a different video from your playlists"
+                  aria-label="Pick a different video from your playlists"
+                  className="grid h-8 w-8 place-items-center rounded-full border border-border text-muted hover:border-border-strong hover:text-foreground transition"
                 >
-                  {dailyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shuffle className="h-4 w-4" />}
+                  <Shuffle className="h-4 w-4" />
                 </button>
               </div>
-              <div className="mt-2 font-display text-lg font-bold leading-snug line-clamp-2">{daily.title}</div>
+              <div className="mt-2 font-display text-lg font-bold leading-snug line-clamp-2">{dailyVideo.title}</div>
               <div className="text-sm text-muted mt-1">
-                {daily.channel}
-                {daily.publishedYear ? ` · uploaded ${daily.publishedYear}` : ""}
+                {dailyVideo.channel}
+                {dailyPlaylistName ? ` · from "${dailyPlaylistName}"` : ""}
               </div>
               <div className="mt-4">
-                <VideoActions videoId={daily.id} watched={daily.watched} onWatched={onDailyWatched} onRemind={onDailyRemind} />
+                <VideoActions
+                  videoId={dailyVideo.id}
+                  watched={dailyVideo.watched}
+                  onWatched={() => onWatched(dailyVideo.playlistId, dailyVideo.id)}
+                  onRemind={() => onRemind(dailyVideo.playlistId, dailyVideo.id)}
+                  onRemove={() => onRemove(dailyVideo.playlistId, dailyVideo.id)}
+                />
               </div>
             </div>
           </div>
         </motion.section>
-      ) : dailyError ? (
-        <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface p-5">
-          <div className="min-w-0">
-            <div className="font-medium">Couldn't pick today's random video</div>
-            <div className="mt-1 text-sm text-muted break-words">{dailyError}</div>
-          </div>
-          <button
-            onClick={onDailyShuffle}
-            disabled={dailyLoading}
-            className="shrink-0 flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-border-strong transition disabled:opacity-60"
-          >
-            {dailyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shuffle className="h-4 w-4" />} Try again
-          </button>
+      ) : dailyEmpty ? (
+        <div className="rounded-2xl border border-dashed border-border p-6 text-center text-muted">
+          {hasAnyVideos
+            ? "You've watched everything in your playlists — nice work! Add more to get a new daily pick."
+            : "No videos in your playlists yet — add some on YouTube, then check back for a daily pick."}
         </div>
-      ) : dailyLoading ? (
+      ) : (
         <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface p-5 text-muted">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          <span className="text-sm">Picking a random video…</span>
+          <span className="text-sm">Picking today's video…</span>
         </div>
-      ) : null}
+      )}
 
       {loading && playlists.length === 0 && (
         <div className="space-y-3">

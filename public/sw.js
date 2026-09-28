@@ -54,7 +54,7 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification("TaskMan", {
-      body: "Your random video of the day is ready — open TaskMan to watch it.",
+      body: "Your video of the day is ready — open TaskMan to watch it.",
       icon: "/icon.svg",
       badge: "/icon.svg",
       tag: "daily-video",

@@ -70,14 +70,8 @@ export type Playlist = {
   videos: Video[]
 }
 
-// Today's random pick — a video from anywhere on YouTube (not from a playlist),
-// so it has no playlistItemId and can't be "removed from a playlist".
-export type DailyVideo = {
-  id: string
-  title: string
-  channel: string
-  thumb: string
-  duration: string
-  publishedYear: number | null
-  watched: boolean
-}
+// Today's random pick — always a real video from one of the user's own playlists
+// (never fetched from elsewhere on YouTube). A pointer is all that's needed; the
+// actual Video is looked up live from Playlist state each render, so its
+// watched/removed status never drifts out of sync with the playlist itself.
+export type DailyPick = { playlistId: string; videoId: string }
