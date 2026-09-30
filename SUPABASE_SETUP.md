@@ -138,10 +138,11 @@ https://www.googleapis.com/auth/calendar
 https://www.googleapis.com/auth/youtube
 ```
 
-`calendar` lets the app create events. `youtube` is required to delete playlist items and
-to run the search behind the random video of the day (`search.list`, 100 quota units per
-call of the 10,000/day default; the pick is cached for the calendar day). If a user signed
-in before the `youtube` scope was added they will see a "Reconnect Google" prompt once.
+`calendar` lets the app create events. `youtube` is required to delete playlist items
+(and to read your playlists). The "video of the day" is picked at random from videos
+already in your own playlists — it makes no extra YouTube API calls and costs no quota.
+If a user signed in before the `youtube` scope was added they will see a "Reconnect
+Google" prompt once.
 
 ---
 
@@ -240,7 +241,7 @@ anywhere else, e.g. a page-load effect).
    an **empty-body** push using a VAPID JWT it signs itself
    (`supabase/functions/server/vapid.ts`).
 4. The service worker's `push` handler (`public/sw.js`) shows a fixed notification —
-   "Your random video of the day is ready — open TaskMan to watch it." Tapping it opens
+   "Your video of the day is ready — open TaskMan to watch it." Tapping it opens
    or focuses the app.
 
 **Why an empty push, with no title/video baked in:** sending a real payload requires
@@ -333,7 +334,35 @@ retry the next day.
 
 ---
 
-## 8. Local Development
+## 8. How List Syncing Works
+
+Supabase is the source of truth for your lists; the browser keeps a local copy so the
+app opens instantly and keeps working offline. Nothing here needs any Supabase-side
+setup — it uses the existing `GET/PUT /lists` routes.
+
+- **On every load (and when you tap Refresh)** the app asks Supabase for the current
+  lists. If this device has nothing unsaved, it simply adopts Supabase's copy. (It used
+  to trust its local cache and never ask, so changes made elsewhere never appeared.)
+- **Every change auto-saves** about a second after you stop editing — adds, edits,
+  deletes, tags, priorities, new lists — not only new items. Rapid edits are batched into
+  one save. The line under the buttons shows *Saving… / All changes saved / an error*.
+- **Save** re-checks Supabase at that moment and opens a comparison of this device
+  against Supabase (what would be added, removed, or replaced) before you confirm.
+- **Nothing is overwritten blindly.** Each device remembers the state it last synced. If
+  Supabase and this device have *both* changed since then, or the device has never synced
+  before (e.g. right after upgrading from the old app), the comparison opens and
+  auto-save pauses until you choose *Save this device's version* or *Use Supabase's
+  version*. Refresh likewise asks before discarding unsaved local changes.
+- **Failures are reported.** A rejected or failed save (expired sign-in, offline, server
+  error) shows in the status line instead of being reported as saved.
+
+Local storage keys involved: `reel.lists` (the cached lists), `reel.lists_base` (the state
+at this device's last successful sync), and `reel.lists_owner` (which account the cache
+belongs to, so another Google account on the same browser never inherits or pushes it).
+
+---
+
+## 9. Local Development
 
 ```bash
 # Install dependencies
@@ -354,14 +383,17 @@ supabase functions serve    # Runs edge functions locally
 
 ---
 
-## 9. File Map
+## 10. File Map
 
 | File                                      | Purpose                                          |
 |-------------------------------------------|--------------------------------------------------|
 | `src/lib/supabase.ts`                     | Supabase client + Google scopes + server URL     |
 | `src/lib/auth.ts`                         | Google OAuth sign-in/out, refresh-token hand-off, silent access-token renewal |
-| `src/lib/store.ts`                        | Edge function calls for lists + watched IDs      |
-| `src/lib/google.ts`                       | Google Calendar and YouTube API calls (incl. random video search) |
+| `src/lib/store.ts`                        | Edge function calls for lists + watched IDs, local cache and sync baseline |
+| `src/lib/useSyncedLists.ts`               | Sync engine: load-time reconciliation, debounced auto-save, conflict pause (see section 8) |
+| `src/lib/diff.ts`                         | Compares this device's lists with Supabase's, per list and per item |
+| `src/components/SyncCompareDialog.tsx`    | The "this device vs Supabase" comparison overlay |
+| `src/lib/google.ts`                       | Google Calendar and YouTube API calls (playlists, playlist-item delete, calendar events) |
 | `src/lib/push.ts`                         | Web Push subscribe/unsubscribe + VAPID public key (see section 7) |
 | `supabase/functions/server/index.tsx`     | Edge function routes (lists, watched, Google token renewal, push subscriptions, cron, health) |
 | `supabase/functions/server/kv_store.tsx`  | Auto-generated KV store client (do not edit)     |

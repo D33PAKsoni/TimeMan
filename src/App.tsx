@@ -6,12 +6,14 @@ import Login from "./components/Login"
 import Lists from "./components/Lists"
 import Playlists from "./components/Playlists"
 import SyncDialog, { type SyncRequest } from "./components/SyncDialog"
+import SyncCompareDialog from "./components/SyncCompareDialog"
 import { supabase } from "./lib/supabase"
 import { signInWithGoogle, signOut, cacheProviderToken, saveGoogleRefreshToken, withGoogleToken, GoogleAuthError } from "./lib/auth"
 import { fetchPlaylists, createCalendarEvent, deletePlaylistItem } from "./lib/google"
-import { loadLists, saveLists, loadWatched, addWatched, loadDailyPick, saveDailyPick } from "./lib/store"
+import { loadWatched, addWatched, loadDailyPick, saveDailyPick } from "./lib/store"
+import { useSyncedLists } from "./lib/useSyncedLists"
 import { getPushStatus, subscribeToPush, unsubscribeFromPush, type PushStatus } from "./lib/push"
-import { defaultLists, defaultTodoList, type DailyPick, type ListCategory, type ListKind, type Playlist, type Priority, type Video } from "./data/mock"
+import { type DailyPick, type ListCategory, type ListKind, type Playlist, type Priority, type Video } from "./data/mock"
 
 type View = "lists" | "playlists"
 
@@ -64,22 +66,32 @@ function describeGoogleError(e: unknown): { message: string; kind: "reconnect" |
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
+  // Keyed on the user id, not the session object: Supabase emits a new session object on
+  // every token refresh and tab focus, which used to re-run all the loading below.
+  const userId = session?.user.id ?? null
   const [booting, setBooting] = useState(true)
   const [view, setView] = useState<View>("lists")
-  const [lists, setLists] = useState<ListCategory[]>(defaultLists)
+  const {
+    lists,
+    setLists,
+    status: syncStatus,
+    statusMessage: syncMessage,
+    dialog: syncDialog,
+    refresh: refreshLists,
+    openSaveDialog,
+    confirmSave,
+    useServerVersion,
+    closeDialog: closeSyncDialog,
+  } = useSyncedLists(userId)
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loadingPlaylists, setLoadingPlaylists] = useState(true)
   const [dailyPick, setDailyPick] = useState<DailyPick | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
   const [demo, setDemo] = useState(false)
   const [demoReason, setDemoReason] = useState<string>("")
   const [demoKind, setDemoKind] = useState<"reconnect" | "retry">("reconnect")
   const [dialog, setDialog] = useState<DialogState>(null)
 
-  // Keyed on the user id, not the session object: Supabase emits a new session object on
-  // every token refresh and tab focus, which used to re-run all the loading below.
-  const userId = session?.user.id ?? null
 
   // Session bootstrap + auth changes.
   useEffect(() => {
@@ -97,33 +109,12 @@ export default function App() {
     return () => sub.subscription.unsubscribe()
   }, [])
 
-  // Load real data once signed in.
+  // Load real data once signed in. Lists are handled by useSyncedLists above; this
+  // loads playlists.
   useEffect(() => {
     if (!userId) return
     let cancelled = false
     ;(async () => {
-      // Custom lists live in our DB; seed empty categories on first run.
-      try {
-        const stored = await loadLists()
-        if (cancelled) return
-        if (stored?.length) {
-          // Accounts created before the ToDo default existed won't have it in
-          // their saved lists — add it (without touching anything else) so it
-          // still becomes the default tab on open, same as a fresh account.
-          if (stored.some((c) => c.id === "todo")) {
-            setLists(stored)
-          } else {
-            const withTodo = [defaultTodoList, ...stored]
-            setLists(withTodo)
-            saveLists(withTodo).catch(() => {})
-          }
-        } else {
-          await saveLists(defaultLists)
-        }
-      } catch {
-        /* keep local lists */
-      }
-
       setLoadingPlaylists(true)
       try {
         const watched = new Set(await loadWatched())
@@ -229,13 +220,10 @@ export default function App() {
     setTimeout(() => setToast(null), 2800)
   }
 
-  function updateLists(next: ListCategory[]) {
-    setLists(next)
-    if (session) saveLists(next).catch(() => {})
-  }
-
+  // setLists (from useSyncedLists) persists locally instantly and auto-saves to
+  // Supabase on a short debounce — every mutation below just calls it directly.
   function mapItems(catId: string, fn: (items: ListCategory["items"]) => ListCategory["items"]) {
-    updateLists(lists.map((c) => (c.id === catId ? { ...c, items: fn(c.items) } : c)))
+    setLists(lists.map((c) => (c.id === catId ? { ...c, items: fn(c.items) } : c)))
   }
 
   function toggleItem(catId: string, itemId: string) {
@@ -264,13 +252,13 @@ export default function App() {
   // Returns the new list's id so the Lists screen can switch to it.
   function createList(name: string, kind: ListKind, accent: string): string {
     const id = crypto.randomUUID()
-    updateLists([...lists, { id, name, kind, accent, items: [] }])
+    setLists([...lists, { id, name, kind, accent, items: [] }])
     return id
   }
 
   function deleteList(catId: string) {
     if (lists.length <= 1) return
-    updateLists(lists.filter((c) => c.id !== catId))
+    setLists(lists.filter((c) => c.id !== catId))
     notify("List deleted")
   }
 
@@ -315,20 +303,6 @@ export default function App() {
       { id: crypto.randomUUID(), title, note: "", done: false, syncedToCalendar: false, tags: [] },
       ...items,
     ])
-  }
-
-  // Manual backend save — fallback when the auto-save didn't fire.
-  async function manualSync() {
-    if (!session) return
-    setSaving(true)
-    try {
-      await saveLists(lists)
-      notify("Lists saved to your account")
-    } catch {
-      notify("Couldn't save — check your connection")
-    } finally {
-      setSaving(false)
-    }
   }
 
   function markWatched(plId: string, vId: string) {
@@ -482,8 +456,10 @@ export default function App() {
                   onSetPriority={setPriority}
                   onCreateList={createList}
                   onDeleteList={deleteList}
-                  onSave={manualSync}
-                  saving={saving}
+                  onSave={openSaveDialog}
+                  onRefresh={refreshLists}
+                  syncStatus={syncStatus}
+                  syncMessage={syncMessage}
                 />
               )}
               {view === "playlists" && (
@@ -530,6 +506,13 @@ export default function App() {
           dialog?.run(start, durationMin)
           setDialog(null)
         }}
+      />
+
+      <SyncCompareDialog
+        dialog={syncDialog}
+        onSave={() => void confirmSave()}
+        onUseServer={useServerVersion}
+        onClose={closeSyncDialog}
       />
 
       <AnimatePresence>

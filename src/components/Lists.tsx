@@ -6,7 +6,7 @@ import {
   CalendarPlus,
   CalendarCheck2,
   Cloud,
-  Loader2,
+  RefreshCw,
   Trash2,
   X,
   Tag,
@@ -25,6 +25,7 @@ import {
   Star,
   List as ListGlyph,
 } from "lucide-react"
+import type { SyncStatus } from "../lib/useSyncedLists"
 import { PRIORITY_LEVELS, priorityColor, type ListCategory, type ListKind, type Priority } from "../data/mock"
 
 // Icon registry. The first four keys are the built-in list kinds; the rest are
@@ -61,6 +62,22 @@ const ACCENTS = [
 // "#Sci Fi " -> "sci-fi"
 const normTag = (raw: string) => raw.trim().replace(/^#+/, "").toLowerCase().replace(/\s+/g, "-").slice(0, 24)
 
+function SyncStatusLine({ status, message }: { status: SyncStatus; message: string | null }) {
+  const map: Record<SyncStatus, { text: string; color: string }> = {
+    loading: { text: "Checking Supabase…", color: "var(--color-muted-2)" },
+    saving: { text: "Saving…", color: "var(--color-muted-2)" },
+    saved: { text: "All changes saved", color: "var(--color-accent)" },
+    error: { text: message ?? "Couldn't save", color: "var(--color-error)" },
+    paused: { text: message ?? "Not saved — tap Save to review", color: "var(--color-amber)" },
+  }
+  const m = map[status]
+  return (
+    <div className="font-mono text-[11px]" style={{ color: m.color }} role="status" aria-live="polite">
+      {m.text}
+    </div>
+  )
+}
+
 export default function Lists({
   lists,
   onToggle,
@@ -73,7 +90,9 @@ export default function Lists({
   onCreateList,
   onDeleteList,
   onSave,
-  saving,
+  onRefresh,
+  syncStatus,
+  syncMessage,
 }: {
   lists: ListCategory[]
   onToggle: (catId: string, itemId: string) => void
@@ -86,7 +105,9 @@ export default function Lists({
   onCreateList: (name: string, kind: ListKind, accent: string) => string
   onDeleteList: (catId: string) => void
   onSave: () => void
-  saving: boolean
+  onRefresh: () => void
+  syncStatus: SyncStatus
+  syncMessage: string | null
 }) {
   const [active, setActive] = useState(lists[0].id)
   const [draft, setDraft] = useState("")
@@ -165,14 +186,29 @@ export default function Lists({
           <div className="font-mono text-xs uppercase tracking-widest text-muted-2">Custom categories</div>
           <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight mt-1">Lists</h1>
         </div>
-        <button
-          onClick={onSave}
-          disabled={saving}
-          className="flex items-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold hover:brightness-110 active:scale-[.98] transition disabled:opacity-60"
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
-          Sync
-        </button>
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onRefresh}
+              disabled={syncStatus === "loading"}
+              title="Load the current state from Supabase"
+              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm font-medium text-muted hover:border-border-strong hover:text-foreground active:scale-[.98] transition disabled:opacity-60"
+            >
+              <RefreshCw className={"h-4 w-4 " + (syncStatus === "loading" ? "animate-spin" : "")} />
+              Refresh
+            </button>
+            <button
+              onClick={onSave}
+              disabled={syncStatus === "loading"}
+              title="Compare this device with Supabase, then save"
+              className="flex items-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold hover:brightness-110 active:scale-[.98] transition disabled:opacity-60"
+            >
+              <Cloud className="h-4 w-4" />
+              Save
+            </button>
+          </div>
+          <SyncStatusLine status={syncStatus} message={syncMessage} />
+        </div>
       </div>
 
       {/* Category tabs */}
